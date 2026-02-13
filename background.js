@@ -16,7 +16,7 @@ let state = {
     playing: false,
     nativeHostError: null
 };
-
+ 
 let settings = {
     showProgressBar: true,
     showPlayState: true,
