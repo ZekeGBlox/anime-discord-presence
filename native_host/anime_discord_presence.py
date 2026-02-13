@@ -10,7 +10,7 @@ import os
 import time
 import socket
 
-CLIENT_ID = "1461376778374348978"
+CLIENT_ID = ""
 
 settings = {
     'showProgressBar': True,
