@@ -1,7 +1,7 @@
 {
   "name": "com.animepresence.discord",
   "description": "Anime Discord Presence Native Host",
-  "path": "C:\\Users\\ollie\\OneDrive\\crunchyroll-discord-rpc\\native_host\\anime_discord_presence.bat",
+  "path": "",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://jiaikdhohilmmgdcojmnkmaidjoenebn/"
