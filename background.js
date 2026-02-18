@@ -45,10 +45,13 @@ function connectNative() {
             clearInterval(keepaliveInterval);
             keepaliveInterval = null;
 
-            if (err && err.message && err.message.includes('not found')) {
-                state.nativeHostError = 'not_installed';
-                notifyPopup();
-                return;
+            if (err && err.message) {
+                let m = err.message.toLowerCase();
+                if (m.includes('not found') || m.includes('not_found') || m.includes('native messaging host') || m.includes('specified native')) {
+                    state.nativeHostError = 'not_installed';
+                    notifyPopup();
+                    return;
+                }
             }
 
             state.nativeHostError = null;
@@ -61,7 +64,12 @@ function connectNative() {
             sendNative({ type: 'ping' });
         }, 25000);
 
-        sendNative({ type: 'settings_update', settings });
+        setTimeout(() => {
+            sendNative({ type: 'settings_update', settings });
+            if (settings.clientId) {
+                sendNative({ type: 'set_client_id', clientId: settings.clientId });
+            }
+        }, 100);
     } catch (e) {
         nativePort = null;
         state.nativeHostError = 'not_installed';
@@ -143,9 +151,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let oldClientId = settings.clientId;
         settings = { ...settings, ...msg.settings };
         broadcastToTabs({ type: 'SETTINGS_CHANGED', settings: msg.settings });
-        sendNative({ type: 'settings_update', settings });
-        if (settings.clientId && settings.clientId !== oldClientId) {
-            sendNative({ type: 'set_client_id', clientId: settings.clientId });
+        if (settings.clientId && !nativePort && state.enabled) {
+            connectNative();
+        } else {
+            sendNative({ type: 'settings_update', settings });
+            if (settings.clientId && settings.clientId !== oldClientId) {
+                sendNative({ type: 'set_client_id', clientId: settings.clientId });
+            }
         }
     }
 

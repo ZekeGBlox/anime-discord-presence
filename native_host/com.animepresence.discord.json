@@ -1,7 +1,7 @@
 {
   "name": "com.animepresence.discord",
   "description": "Anime Discord Presence Native Host",
-  "path": "REPLACE_WITH_ACTUAL_PATH\\native_host\\anime_discord_presence.bat",
+  "path": "REPLACE_WITH_ACTUAL_PATH",
   "type": "stdio",
   "allowed_origins": [
     "chrome-extension://YOUR_EXTENSION_ID/"

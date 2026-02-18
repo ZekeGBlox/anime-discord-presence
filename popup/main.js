@@ -19,15 +19,30 @@ document.addEventListener('DOMContentLoaded', () => {
         let nowWatching = document.getElementById('nowWatching');
         let idleState = document.getElementById('idleState');
 
-        if (s.nativeHostError === 'not_installed') {
+        function showSetup() {
             setupScreen.style.display = 'block';
             document.querySelector('.tabs').style.display = 'none';
             document.querySelectorAll('.tab-content').forEach(tc => {
                 tc.classList.remove('active');
                 tc.style.removeProperty('display');
             });
+            connectionStatus.classList.remove('connected');
+            connectionStatus.classList.add('disconnected');
+            connectionText.textContent = 'Not set up yet';
+            nowWatching.style.display = 'none';
+            idleState.style.display = 'none';
+        }
+
+        if (s.nativeHostError === 'not_installed') {
+            showSetup();
             return;
         }
+
+        chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (settings) => {
+            if (!settings || !settings.clientId) {
+                showSetup();
+            }
+        });
 
         setupScreen.style.display = 'none';
         document.querySelector('.tabs').style.display = 'flex';

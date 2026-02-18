@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-# native messaging host for anime discord presence
-# talks to chrome via stdin/stdout and updates discord rich presence
-
 import json
 import struct
 import sys
@@ -10,7 +7,7 @@ import os
 import time
 import socket
 
-CLIENT_ID = "YOUR_CLIENT_ID"
+CLIENT_ID = None
 
 settings = {
     'showProgressBar': True,
@@ -59,28 +56,39 @@ class DiscordIPC:
         self.sock = None
         self.connected = False
 
-    def pipe_path(self):
+    def pipe_path(self, n=0):
         if sys.platform == 'win32':
-            return r'\\.\pipe\discord-ipc-0'
+            return r'\\.\pipe\discord-ipc-' + str(n)
         for env in ['XDG_RUNTIME_DIR', 'TMPDIR', 'TMP', 'TEMP']:
             path = os.environ.get(env)
             if path:
-                return os.path.join(path, 'discord-ipc-0')
-        return '/tmp/discord-ipc-0'
+                return os.path.join(path, 'discord-ipc-' + str(n))
+        return '/tmp/discord-ipc-' + str(n)
 
     def connect(self):
-        path = self.pipe_path()
-        try:
-            if sys.platform == 'win32':
-                self.sock = open(path, 'r+b', buffering=0)
-            else:
-                self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                self.sock.connect(path)
-            self.connected = True
-            return self._handshake()
-        except Exception:
-            self.connected = False
-            return False
+        for i in range(10):
+            path = self.pipe_path(i)
+            try:
+                if sys.platform == 'win32':
+                    self.sock = open(path, 'r+b', buffering=0)
+                else:
+                    self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    self.sock.connect(path)
+                self.connected = True
+                if self._handshake():
+                    log(f"Connected on pipe {i}")
+                    return True
+                self.close()
+            except Exception:
+                if sys.platform != 'win32' and self.sock:
+                    try:
+                        self.sock.close()
+                    except Exception:
+                        pass
+                    self.sock = None
+                continue
+        self.connected = False
+        return False
 
     def _send(self, op, payload):
         if not self.connected or not self.sock:
@@ -103,14 +111,24 @@ class DiscordIPC:
             return None
         try:
             if sys.platform == 'win32':
-                header = self.sock.read(8)
+                header = b''
+                while len(header) < 8:
+                    chunk = self.sock.read(8 - len(header))
+                    if not chunk:
+                        return None
+                    header += chunk
             else:
                 header = self.sock.recv(8)
             if len(header) < 8:
                 return None
             _, length = struct.unpack('<II', header)
             if sys.platform == 'win32':
-                data = self.sock.read(length)
+                data = b''
+                while len(data) < length:
+                    chunk = self.sock.read(length - len(data))
+                    if not chunk:
+                        return None
+                    data += chunk
             else:
                 data = self.sock.recv(length)
             return json.loads(data.decode('utf-8'))
@@ -118,7 +136,10 @@ class DiscordIPC:
             return None
 
     def _handshake(self):
-        return self._send(0, {'v': 1, 'client_id': self.client_id}) is not None
+        resp = self._send(0, {'v': 1, 'client_id': self.client_id})
+        if resp and resp.get('cmd') == 'DISPATCH' and resp.get('evt') == 'READY':
+            return True
+        return False
 
     def set_activity(self, activity):
         return self._send(1, {
@@ -147,7 +168,7 @@ class DiscordIPC:
 class DiscordRPC:
     def __init__(self):
         self.client_id = CLIENT_ID
-        self.ipc = DiscordIPC(self.client_id)
+        self.ipc = None
         self.connected = False
         self.current_anime = None
         self.start_time = None
@@ -155,11 +176,16 @@ class DiscordRPC:
         self._last_season = None
 
     def connect(self):
+        if not self.client_id:
+            log("No client ID set, waiting...", "WARN")
+            return False
+        if not self.ipc:
+            self.ipc = DiscordIPC(self.client_id)
         if self.ipc.connect():
             self.connected = True
             log("Connected to Discord")
             return True
-        log("Discord not running", "WARN")
+        log("Discord not running or rejected client ID", "WARN")
         self.connected = False
         return False
 
@@ -175,7 +201,8 @@ class DiscordRPC:
     def try_reconnect(self):
         if self.connected:
             return True
-        self.ipc.close()
+        if self.ipc:
+            self.ipc.close()
         return self.connect()
 
     def process_update(self, data):
@@ -221,11 +248,9 @@ class DiscordRPC:
             return False
 
     def _clean_ep_title(self, ep_title, ep_num):
-        """Strip redundant episode number prefixes from the title."""
         import re
         if not ep_title:
             return ep_title
-        # remove things like "E7 - ", "E07 - ", "Episode 7 - " from the start
         cleaned = re.sub(r'^E(?:pisode)?\s*\d+\s*[-\u2013]\s*', '', ep_title, flags=re.IGNORECASE).strip()
         return cleaned if cleaned else ep_title
 
@@ -246,7 +271,6 @@ class DiscordRPC:
 
         ep_title = self._clean_ep_title(ep_title, ep_num)
 
-        # extract season number from season string like "Season 1" or "S1"
         season_num = None
         if season:
             import re
@@ -254,10 +278,8 @@ class DiscordRPC:
             if m:
                 season_num = m.group(1)
 
-        # details: anime title
         details = anime[:128]
 
-        # state: "S1:E7 - Episode Name" or just episode name
         if ep_num and season_num:
             ep_label = f"S{season_num}:E{ep_num}"
         elif ep_num:
@@ -277,7 +299,6 @@ class DiscordRPC:
 
         cover = thumbnail
 
-        # hover over image: show season + episode info
         if season and ep_num:
             large_text = f"{season}, Episode {ep_num}"
         elif ep_num:
@@ -286,8 +307,6 @@ class DiscordRPC:
             large_text = anime
         large_text = large_text[:128]
 
-        # timestamps: start = where we are in the episode, end = episode length
-        # this makes Discord show "XX:XX elapsed" progress matching actual video position
         timestamps = {}
         if duration > 0:
             now = int(time.time())
@@ -306,7 +325,7 @@ class DiscordRPC:
             'buttons': [{'label': 'Watch', 'url': ep_url[:512]}]
         }
 
-        if not self.ipc.set_activity(activity):
+        if not self.ipc or not self.ipc.set_activity(activity):
             self.connected = False
 
     def _browsing(self, page):
@@ -339,14 +358,15 @@ class DiscordRPC:
         })
 
     def clear(self):
-        if self.connected:
+        if self.connected and self.ipc:
             self.ipc.clear_activity()
         self.current_anime = None
         self.start_time = None
 
     def disconnect(self):
         self.clear()
-        self.ipc.close()
+        if self.ipc:
+            self.ipc.close()
         self.connected = False
 
 
@@ -354,10 +374,7 @@ def main():
     log("Native host starting")
     rpc = DiscordRPC()
 
-    if rpc.connect():
-        send_message({'type': 'status', 'connected': True})
-    else:
-        send_message({'type': 'status', 'connected': False, 'error': 'Discord not running'})
+    send_message({'type': 'status', 'connected': False, 'error': 'waiting_for_client_id'})
 
     try:
         while True:
@@ -367,23 +384,29 @@ def main():
 
             t = msg.get('type', '')
 
-            if t == 'anime_state':
-                rpc.process_update(msg)
-                send_message({'type': 'status', 'connected': rpc.connected})
-            elif t == 'settings_update':
+            if t == 'settings_update':
                 s = msg.get('settings', {})
                 new_id = s.get('clientId', '')
                 if new_id and new_id != rpc.client_id:
                     rpc.set_client_id(new_id)
-                    send_message({'type': 'status', 'connected': rpc.connected})
                 settings.update(s)
+                send_message({'type': 'status', 'connected': rpc.connected})
             elif t == 'set_client_id':
                 new_id = msg.get('clientId', '')
                 if new_id and new_id != rpc.client_id:
                     rpc.set_client_id(new_id)
                     send_message({'type': 'status', 'connected': rpc.connected})
+            elif t == 'anime_state':
+                if not rpc.connected and rpc.client_id:
+                    rpc.connect()
+                rpc.process_update(msg)
+                send_message({'type': 'status', 'connected': rpc.connected})
             elif t == 'ping':
-                send_message({'type': 'pong'})
+                if not rpc.connected and rpc.client_id:
+                    rpc.connect()
+                    send_message({'type': 'status', 'connected': rpc.connected})
+                else:
+                    send_message({'type': 'pong'})
             elif t == 'disconnect':
                 rpc.clear()
     except Exception as e:
