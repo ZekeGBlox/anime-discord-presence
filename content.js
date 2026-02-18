@@ -4,6 +4,7 @@
     let lastVideoState = null;
     let lastSent = null;
     let enabled = true;
+    let autoSkip = false;
     let iframeFound = false;
     let iframeAttempts = 0;
 
@@ -13,16 +14,43 @@
         idleStatus: 'Browsing Anime'
     };
 
-    chrome.storage.local.get(['enabled', 'showProgressBar', 'showPlayState', 'idleStatus'], (r) => {
+    function broadcastAutoSkip() {
+        let msg = { type: 'ANIME_PRESENCE_AUTOSKIP', enabled: autoSkip };
+        document.querySelectorAll('iframe').forEach(iframe => {
+            try { iframe.contentWindow.postMessage(msg, '*'); } catch(e) {}
+        });
+    }
+
+    chrome.storage.local.get(['enabled', 'showProgressBar', 'showPlayState', 'idleStatus', 'autoSkip'], (r) => {
         enabled = r.enabled !== false;
+        autoSkip = r.autoSkip || false;
         if (r.showProgressBar !== undefined) rpcSettings.showProgressBar = r.showProgressBar;
         if (r.showPlayState !== undefined) rpcSettings.showPlayState = r.showPlayState;
         if (r.idleStatus) rpcSettings.idleStatus = r.idleStatus;
+        setTimeout(broadcastAutoSkip, 2000);
     });
 
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.type === 'ENABLED_CHANGED') enabled = msg.enabled;
-        if (msg.type === 'SETTINGS_CHANGED') rpcSettings = { ...rpcSettings, ...msg.settings };
+        if (msg.type === 'SETTINGS_CHANGED') {
+            rpcSettings = { ...rpcSettings, ...msg.settings };
+            if (msg.settings.autoSkip !== undefined) {
+                autoSkip = msg.settings.autoSkip;
+                broadcastAutoSkip();
+            }
+        }
+        if (msg.type === 'VIDEO_CONTROL') {
+            let controlMsg = {
+                type: 'ANIME_PRESENCE_VIDEO_CONTROL',
+                source: 'anime-presence-content',
+                action: msg.action,
+                value: msg.value
+            };
+            document.querySelectorAll('iframe').forEach(iframe => {
+                try { iframe.contentWindow.postMessage(controlMsg, '*'); } catch(e) {}
+            });
+            window.postMessage(controlMsg, '*');
+        }
     });
 
     window.addEventListener('message', (e) => {
@@ -111,7 +139,6 @@
             }
         }
 
-        // fallback: parse page title
         if (!anime || !epNum) {
             let match = document.title.match(/^Watch\s+(.+?)\s+(?:Episode\s+)?(\d+)(?:\s*[-\u2013]\s*(.+))?/i);
             if (match) {
@@ -228,6 +255,8 @@
                 episode: data.epNum,
                 episodeTitle: data.epTitle,
                 progress: data.video.currentTimeFormatted + ' / ' + data.video.durationFormatted,
+                currentTime: data.video.currentTime,
+                duration: data.video.duration,
                 pageState: data.pageState,
                 thumbnail: data.thumb,
                 playing: data.video.playing
@@ -248,6 +277,7 @@
                 iframeAttempts = 0;
                 tryFindIframe();
                 setTimeout(sendUpdate, 1000);
+                setTimeout(broadcastAutoSkip, 2000);
             }
         }).observe(document.body || document.documentElement, { childList: true, subtree: true });
 

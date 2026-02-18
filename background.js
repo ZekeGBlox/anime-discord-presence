@@ -16,7 +16,7 @@ let state = {
     playing: false,
     nativeHostError: null
 };
- 
+
 let settings = {
     showProgressBar: true,
     showPlayState: true,
@@ -56,7 +56,6 @@ function connectNative() {
             scheduleReconnect();
         });
 
-        // keepalive so the service worker doesnt die
         clearInterval(keepaliveInterval);
         keepaliveInterval = setInterval(() => {
             sendNative({ type: 'ping' });
@@ -154,6 +153,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(settings);
     }
 
+    if (msg.type === 'VIDEO_CONTROL') {
+        broadcastToTabs(msg);
+    }
+
     return true;
 });
 
@@ -166,7 +169,8 @@ chrome.runtime.onInstalled.addListener(() => {
         compactMode: false,
         showThumbnails: true,
         accentColor: 'orange',
-        clientId: ''
+        clientId: '',
+        autoSkip: false
     });
 });
 

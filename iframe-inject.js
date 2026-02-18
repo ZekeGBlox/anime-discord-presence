@@ -3,6 +3,7 @@
     let lastState = null;
     let videoElement = null;
     let initialized = false;
+    let autoSkip = false;
 
     function findVideo() {
         const selectors = ['#player0', 'video', '#velocity-player-package video', '.video-player video', '.vjs-tech'];
@@ -36,7 +37,8 @@
             duration: duration,
             progress: duration > 0 ? Math.floor((current / duration) * 100) : 0,
             currentTimeFormatted: formatTime(current),
-            durationFormatted: formatTime(duration)
+            durationFormatted: formatTime(duration),
+            playbackRate: videoElement.playbackRate || 1
         };
     }
 
@@ -58,6 +60,37 @@
         }
     }
 
+    window.addEventListener('message', (e) => {
+        if (e.data && e.data.type === 'ANIME_PRESENCE_AUTOSKIP') {
+            autoSkip = e.data.enabled;
+            return;
+        }
+        if (!e.data || e.data.type !== 'ANIME_PRESENCE_VIDEO_CONTROL') return;
+        if (e.data.source !== 'anime-presence-content') return;
+        if (!videoElement) videoElement = findVideo();
+        if (!videoElement) return;
+
+        switch (e.data.action) {
+            case 'play': videoElement.play(); break;
+            case 'pause': videoElement.pause(); break;
+            case 'togglePlay':
+                if (videoElement.paused) videoElement.play();
+                else videoElement.pause();
+                break;
+            case 'seekForward':
+                videoElement.currentTime = Math.min(videoElement.duration, videoElement.currentTime + (e.data.value || 10));
+                break;
+            case 'seekBack':
+                videoElement.currentTime = Math.max(0, videoElement.currentTime - (e.data.value || 10));
+                break;
+            case 'setSpeed':
+                videoElement.playbackRate = e.data.value || 1;
+                break;
+        }
+        lastState = null;
+        setTimeout(sendToParent, 100);
+    });
+
     function setupVideoListeners() {
         videoElement = findVideo();
         if (!videoElement) {
@@ -72,11 +105,43 @@
         sendToParent();
     }
 
+    function isSkipVisible(el) {
+        if (!el || !el.isConnected) return false;
+        let r = el.getBoundingClientRect();
+        let s = window.getComputedStyle(el);
+        if (!r || !s) return false;
+        if (s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0') return false;
+        return r.width > 0 && r.height > 0;
+    }
+
+    function tryClickSkip(el) {
+        if (!el || !isSkipVisible(el)) return false;
+        let btn = el.closest('button, [role="button"], a, [tabindex]') || el;
+        let label = (btn.textContent || '').toLowerCase();
+        if (label.includes('skip')) {
+            try { btn.click(); return true; } catch(e) { return false; }
+        }
+        return false;
+    }
+
+    function tryAutoSkip() {
+        if (!autoSkip) return;
+        let roots = [document];
+        document.querySelectorAll('*').forEach(n => { if (n.shadowRoot) roots.push(n.shadowRoot); });
+        for (let root of roots) {
+            let buttons = root.querySelectorAll('button, [role="button"], a, [tabindex]');
+            for (let el of buttons) {
+                if (tryClickSkip(el)) return;
+            }
+        }
+    }
+
     const observer = new MutationObserver(() => {
         if (!videoElement || !initialized) {
             const v = findVideo();
             if (v) setupVideoListeners();
         }
+        tryAutoSkip();
     });
 
     function startObserver() {
@@ -86,6 +151,8 @@
             setTimeout(startObserver, 100);
         }
     }
+
+    setInterval(tryAutoSkip, 1000);
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
