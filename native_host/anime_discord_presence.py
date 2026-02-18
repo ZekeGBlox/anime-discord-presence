@@ -10,7 +10,7 @@ import os
 import time
 import socket
 
-CLIENT_ID = ""
+CLIENT_ID = "YOUR_CLIENT_ID"
 
 settings = {
     'showProgressBar': True,
@@ -152,6 +152,7 @@ class DiscordRPC:
         self.current_anime = None
         self.start_time = None
         self.last_update = 0
+        self._last_season = None
 
     def connect(self):
         if self.ipc.connect():
@@ -200,8 +201,11 @@ class DiscordRPC:
             video = data.get('video', {})
             ep_url = data.get('episodeUrl', 'https://www.crunchyroll.com')
             thumbnail = data.get('thumbnail')
+            season = data.get('seasonTitle')
 
             if page == 'watching' and anime:
+                if season:
+                    video['season'] = season
                 self._watching(anime, ep_title, ep_num, video, ep_url, thumbnail)
             elif page.startswith('browsing'):
                 self._browsing(page)
@@ -216,6 +220,15 @@ class DiscordRPC:
             self.connected = False
             return False
 
+    def _clean_ep_title(self, ep_title, ep_num):
+        """Strip redundant episode number prefixes from the title."""
+        import re
+        if not ep_title:
+            return ep_title
+        # remove things like "E7 - ", "E07 - ", "Episode 7 - " from the start
+        cleaned = re.sub(r'^E(?:pisode)?\s*\d+\s*[-\u2013]\s*', '', ep_title, flags=re.IGNORECASE).strip()
+        return cleaned if cleaned else ep_title
+
     def _watching(self, anime, ep_title, ep_num, video, ep_url, thumbnail):
         if self.current_anime != anime:
             self.current_anime = anime
@@ -224,42 +237,73 @@ class DiscordRPC:
 
         playing = video.get('playing', False)
         paused = video.get('paused', True)
-        progress = video.get('progress', 0)
         duration = video.get('duration', 0)
-        cur_fmt = video.get('currentTimeFormatted', '0:00')
-        dur_fmt = video.get('durationFormatted', '0:00')
+        current_time = video.get('currentTime', 0)
+        season = video.get('season') or self._last_season
 
+        if season:
+            self._last_season = season
+
+        ep_title = self._clean_ep_title(ep_title, ep_num)
+
+        # extract season number from season string like "Season 1" or "S1"
+        season_num = None
+        if season:
+            import re
+            m = re.search(r'(\d+)', season)
+            if m:
+                season_num = m.group(1)
+
+        # details: anime title
         details = anime[:128]
-        icon = '\u25b6' if (playing and not paused) else '\u23f8'
 
-        if settings.get('showProgressBar', True) and duration > 0:
-            bar = progress_bar(progress, 12)
-            state = f"{icon} {cur_fmt} {bar} {dur_fmt}"
+        # state: "S1:E7 - Episode Name" or just episode name
+        if ep_num and season_num:
+            ep_label = f"S{season_num}:E{ep_num}"
+        elif ep_num:
+            ep_label = f"Episode {ep_num.zfill(2)}"
         else:
-            parts = [icon]
-            if ep_num:
-                parts.append(f"E{ep_num}")
-            if ep_title and ep_title != anime:
-                parts.append(ep_title[:22] + '...' if len(ep_title) > 22 else ep_title)
-            state = ' \u2022 '.join(parts)
+            ep_label = None
+
+        if ep_label and ep_title and ep_title != anime:
+            state = f"{ep_label} - {ep_title}"
+        elif ep_label:
+            state = ep_label
+        elif ep_title and ep_title != anime:
+            state = ep_title
+        else:
+            state = 'Watching'
         state = state[:128]
 
         cover = thumbnail
 
-        large_text = anime
-        if ep_title and ep_title != anime:
-            large_text = f"E{ep_num} - {ep_title}" if ep_num else ep_title
+        # hover over image: show season + episode info
+        if season and ep_num:
+            large_text = f"{season}, Episode {ep_num}"
+        elif ep_num:
+            large_text = f"Episode {ep_num}"
+        else:
+            large_text = anime
         large_text = large_text[:128]
 
+        # timestamps: start = where we are in the episode, end = episode length
+        # this makes Discord show "XX:XX elapsed" progress matching actual video position
+        timestamps = {}
+        if duration > 0:
+            now = int(time.time())
+            timestamps['start'] = now - int(current_time)
+            timestamps['end'] = now - int(current_time) + int(duration)
+
         activity = {
+            'type': 3,
             'details': details,
             'state': state,
-            'timestamps': {'start': self.start_time},
+            'timestamps': timestamps,
             'assets': {
                 'large_image': cover if cover else 'logo',
                 'large_text': large_text
             },
-            'buttons': [{'label': 'Watch Now', 'url': ep_url[:512]}]
+            'buttons': [{'label': 'Watch', 'url': ep_url[:512]}]
         }
 
         if not self.ipc.set_activity(activity):

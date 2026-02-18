@@ -237,7 +237,7 @@
 
     function init() {
         tryFindIframe();
-        setInterval(sendUpdate, 3000);
+        setInterval(sendUpdate, 10000);
 
         let lastUrl = window.location.href;
         new MutationObserver(() => {
